@@ -72,9 +72,10 @@ class HeaParser:
         from scipy.signal import find_peaks
         
         fs = record.fs
-        peak_position_samples = int(fs * 0.42)
+        peak_position_samples = int(fs * 0.42) # ROI stars
+        _end = int(fs * (0.42 + 2)) # 2 seconds after ROI
         target_samples = int(fs * target_duration)
-        signal_ch2 = record.p_signal[peak_position_samples:, 1]
+        signal_ch2 = record.p_signal[peak_position_samples:_end, 1]
         peaks, _ = find_peaks(signal_ch2, height=2.5)
         
         if len(peaks) == 0:
@@ -121,6 +122,8 @@ class HeaParser:
             record.fs = resample_fs
         if align_peak:
             record = self._align_to_peak(record)
+        if normalize:
+            record.p_signal = self._normalize(record.p_signal)
 
         if plot:
             self._plot_record(record, subject_id, study_id)

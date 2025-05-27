@@ -22,7 +22,7 @@ DEST_DIR="/Volumes/Black/Data/ecg4kca/mimic-iv-ecg/1.0/files"
 
 mkdir -p "$DEST_DIR"
 
-for i in {5..7}; do
+for i in {6..7}; do
   P="p100${i}"
   echo "→ Downloading $P"
   
