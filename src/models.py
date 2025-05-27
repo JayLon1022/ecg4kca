@@ -57,7 +57,15 @@ class LitBase(pl.LightningModule):
         self.log("test_" + self.metric_name, score)
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-3)
+        # from the bangzi group
+        optimizer = optim.Adam(
+            self.parameters(), 
+            lr=0.0005, 
+            betas=(0.9, 0.999), 
+            eps=1e-8, 
+            weight_decay=0.0, 
+            amsgrad=False
+        )
         return optimizer
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -152,71 +160,97 @@ class LitCNN(LitBase):
             y_hat = y_hat.squeeze(-1)
         return y_hat
 
-
+# ---------------------------------------------------------------------------- #
+#                      https://github.com/MbetterLife-dsp/                     #
+# ---------------------------------------------------------------------------- #
 class CustomCNN(nn.Module):
     """
-    A custom CNN model with configurable architecture.
+    A custom CNN model with configurable architecture inspired by DCRNN.
+    Uses depthwise separable convolutions followed by LSTM for sequence modeling.
     
     Args:
         input_channels (int): Number of input channels.
         num_classes (int): Number of output classes for classification.
-        conv_channels (List[int]): List of channel dimensions for conv layers. Default: [8, 16, 32].
-        kernel_sizes (List[int]): List of kernel sizes for conv layers. Default: [3, 3, 3].
-        pool_sizes (List[int]): List of pool sizes. Default: [2, 2].
+        depthwise_kernels (List[int]): List of kernel sizes for depthwise conv layers. Default: [128, 64, 64].
+        pointwise_channels (List[int]): List of channel dimensions for pointwise conv layers. Default: [16, 16, 16].
+        pool_sizes (List[int]): List of pool sizes. Default: [2, 5].
+        lstm_hidden (int): LSTM hidden dimension. Default: 10.
         dropout (float): Dropout probability. Default: 0.2.
-        is_classifier (bool): Whether this is a classification model. Default: True.
     """
     def __init__(
         self,
         input_channels: int = 12,
         num_classes: int = None,
-        conv_channels: List[int] = [8, 16, 32],
-        kernel_sizes: List[int] = [3, 3, 3],
-        pool_sizes: List[int] = [2, 2],
+        depthwise_kernels: List[int] = [128, 64, 64],
+        pointwise_channels: List[int] = [16, 16, 16],
+        pool_sizes: List[int] = [2, 5],
+        lstm_hidden: int = 10,
         dropout: float = 0.2,
     ):
         super().__init__()
         self.is_classifier = num_classes is not None
         
-        self.conv1 = nn.Sequential(
-            nn.Conv1d(input_channels, conv_channels[0], kernel_size=kernel_sizes[0], padding="same"),
-            nn.BatchNorm1d(conv_channels[0]),
+        # Separable Conv 1: Depthwise + Pointwise
+        self.separable_conv1 = nn.Sequential(
+            nn.Conv1d(input_channels, input_channels, kernel_size=depthwise_kernels[0], 
+                     padding='same', groups=input_channels),  # Depthwise
+            nn.Conv1d(input_channels, pointwise_channels[0], kernel_size=1, 
+                     padding='same'),  # Pointwise
             nn.ReLU(inplace=True),
+            nn.BatchNorm1d(pointwise_channels[0]),
             nn.MaxPool1d(pool_sizes[0])
         )
         
-        self.conv2 = nn.Sequential(
-            nn.Conv1d(conv_channels[0], conv_channels[1], kernel_size=kernel_sizes[1], padding="same"),
-            nn.BatchNorm1d(conv_channels[1]),
+        # Separable Conv 2: Depthwise + Pointwise
+        self.separable_conv2 = nn.Sequential(
+            nn.Conv1d(pointwise_channels[0], pointwise_channels[0], kernel_size=depthwise_kernels[1], 
+                     padding='same', groups=pointwise_channels[0]),  # Depthwise
+            nn.Conv1d(pointwise_channels[0], pointwise_channels[1], kernel_size=1, 
+                     padding='same'),  # Pointwise
             nn.ReLU(inplace=True),
+            nn.BatchNorm1d(pointwise_channels[1]),
             nn.MaxPool1d(pool_sizes[1])
         )
         
-        self.conv3 = nn.Sequential(
-            nn.Conv1d(conv_channels[1], conv_channels[2], kernel_size=kernel_sizes[2], padding="same"),
-            nn.BatchNorm1d(conv_channels[2]),
-            nn.ReLU(inplace=True)
+        # Separable Conv 3: Depthwise + Pointwise (no pooling)
+        self.separable_conv3 = nn.Sequential(
+            nn.Conv1d(pointwise_channels[1], pointwise_channels[1], kernel_size=depthwise_kernels[2], 
+                     padding='same', groups=pointwise_channels[1]),  # Depthwise
+            nn.Conv1d(pointwise_channels[1], pointwise_channels[2], kernel_size=1, 
+                     padding='same'),  # Pointwise
+            nn.ReLU(inplace=True),
+            nn.BatchNorm1d(pointwise_channels[2])
         )
         
-        # Classification head
+        # LSTM layer
+        self.lstm = nn.LSTM(pointwise_channels[2], lstm_hidden, batch_first=True)
+        
+        # Output head
         if self.is_classifier:
             self.classifier = nn.Sequential(
-                nn.Flatten(),
                 nn.Dropout(dropout),
-                nn.Linear(conv_channels[-1], num_classes),
-                # nn.Softmax(dim=1)
+                nn.Linear(lstm_hidden, num_classes)
             )
         else:
             self.regressor = nn.Sequential(
-                nn.Flatten(),
                 nn.Dropout(dropout),
-                nn.Linear(4096, 1)
+                nn.Linear(lstm_hidden, 1)
             )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
+        # Apply separable convolutions
+        x = self.separable_conv1(x)
+        x = self.separable_conv2(x)
+        x = self.separable_conv3(x)
+        
+        # Transpose for LSTM (batch_first=True expects [batch, seq_len, features])
+        x = x.transpose(1, 2)  # [batch, channels, length] -> [batch, length, channels]
+        
+        # LSTM forward pass
+        lstm_out, _ = self.lstm(x)
+        
+        # Use the last output of the sequence
+        x = lstm_out[:, -1, :]  # [batch, lstm_hidden]
         
         if self.is_classifier:
             return self.classifier(x)
