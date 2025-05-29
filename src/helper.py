@@ -67,13 +67,13 @@ class HeaParser:
         n_samples = int(signal.shape[0] * new_fs / old_fs)
         return resample(signal, n_samples, axis=0)
 
-    def _align_to_peak(self, record, target_duration=4.0):
-        """Align record to 4 seconds with peak at 0.42 second mark."""
+    def _align_to_peak(self, record, target_duration=7.0):
+        """Align record to 7 seconds with peak at 0.42 second mark."""
         from scipy.signal import find_peaks
         
         fs = record.fs
         peak_position_samples = int(fs * 0.42) # ROI stars
-        _end = int(fs * (0.42 + 2)) # 2 seconds after ROI
+        _end = int(fs * (0.42 + 1.5)) # 1.5 seconds after ROI
         target_samples = int(fs * target_duration)
         signal_ch2 = record.p_signal[peak_position_samples:_end, 1]
         peaks, _ = find_peaks(signal_ch2, height=2.5)
@@ -107,7 +107,7 @@ class HeaParser:
     ):
         hea_path = self._get_hea_path(subject_id, study_id)
         record_name = self._check_heapath(hea_path)
-        record = wfdb.rdrecord(record_name, sampfrom=1000, sampto=4000)
+        record = wfdb.rdrecord(record_name, sampfrom=250, sampto=4750)
         
         # preprocess
         fs = record.fs
